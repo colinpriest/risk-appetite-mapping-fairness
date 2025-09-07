@@ -1,0 +1,36 @@
+# Example configuration for LLM Risk Fairness Experiment
+# Copy this to your own config file and modify as needed
+
+# Basic experiment parameters
+K: 60                              # Number of base subjects
+repeats: 2                         # Repeats per condition
+nl_sample: 12                      # Sample size for Name+Location pairs
+stratified: true                   # Use stratified sampling
+use_cache: true                    # Enable response caching
+pause: 0.2                         # Seconds between API calls
+
+# Models to test
+models:
+  - "gpt-4o"
+  - "claude-opus-4.1"
+  - "gemini-2.5-pro"
+
+# Retry configuration
+max_retries: 3                     # Maximum retry attempts per call
+retry_delay: 1.0                   # Initial retry delay in seconds
+timeout: 60.0                      # Request timeout in seconds
+
+# Response validation
+validate_responses: true           # Enable response validation
+min_response_length: 10           # Minimum justification length
+
+# Cost limits (USD)
+max_cost_per_call: 0.50           # Maximum cost per single API call
+max_total_cost: 100.0             # Maximum total experiment cost
+
+# Logging configuration
+log_level: "INFO"                  # DEBUG, INFO, WARNING, ERROR
+log_file: null                     # Auto-generated in output directory
+
+# Progress tracking
+checkpoint_interval: 50            # Save checkpoint every N calls

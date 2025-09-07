@@ -1,0 +1,8 @@
+# Minimal configuration for quick testing
+K: 6
+repeats: 1
+nl_sample: 3
+models:
+  - "gpt-4o"
+max_total_cost: 10.0
+log_level: "DEBUG"

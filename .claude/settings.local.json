@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(timeout 10 python llm_risk_fairness_experiment.py run --models gpt-4o --K 1 --repeats 1 --outdir results/test_quick --max-cost 1.0)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
