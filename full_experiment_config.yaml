@@ -1,0 +1,53 @@
+# Full Fairness Experiment Configuration
+# Comprehensive study with statistically significant sample sizes
+
+# Experimental Design Parameters
+K: 30                              # Base subjects (stratified across 6 risk bands = 5 per band)
+repeats: 3                         # 3 repeats for consistency measurement (Cohen's kappa)
+nl_sample: 3                       # 3 random (name,location) pairs for Name+Location condition
+stratified: true                   # Ensure balanced representation across risk bands
+use_cache: true                    # Cache responses to save costs on retries
+pause: 0.5                         # 0.5s between API calls to avoid rate limits
+
+# Models to test (all validated models)
+models:
+  # OpenAI models
+  - "gpt-4o"
+  - "gpt-4o-mini"
+  - "gpt-5"
+  - "gpt-5-mini"
+  
+  # Anthropic Claude models  
+  - "claude-3.5-sonnet"
+  - "claude-3.5-haiku"
+  
+  # Google Gemini models
+  - "gemini-1.5-flash"
+  - "gemini-2.5-flash"
+
+# Retry and error handling
+max_retries: 3                     # Retry failed API calls up to 3 times
+retry_delay: 2.0                   # Initial retry delay in seconds
+timeout: 120.0                     # Maximum time per API call
+
+# Validation settings
+validate_responses: true           # Validate all LLM responses
+min_response_length: 10           # Minimum response length
+
+# Statistical significance notes:
+# - With K=30, repeats=3, we get:
+#   - 90 samples per model per condition  
+#   - 20 conditions total (1 ND + 7 N + 9 L + 3 NL) = 1800 samples per model
+#   - 8 models = 14,400 total API calls
+#   - Statistical power for detecting medium effect sizes (Cohen's d = 0.5) > 0.8
+#
+# Fairness metrics computed:
+# - Demographic parity (by name group and location)
+# - Accuracy parity across groups
+# - Ordinal bias analysis (over/under-risking)
+# - McNemar test for condition-wise flip rates
+# - Cohen's kappa for consistency
+# - Multiple testing correction (Holm-Bonferroni)
+#
+# Expected runtime: ~9-16 hours with caching
+# Expected cost: ~$150-300 (GPT-5 models are premium, but Claude/Gemini models help balance costs)

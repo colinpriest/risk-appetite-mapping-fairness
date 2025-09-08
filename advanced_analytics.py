@@ -20,7 +20,8 @@ import json
 
 # Statistical libraries
 from scipy import stats
-from sklearn.metrics import brier_score_loss, calibration_curve
+from sklearn.metrics import brier_score_loss
+from sklearn.calibration import calibration_curve
 from sklearn.isotonic import IsotonicRegression
 from sklearn.model_selection import StratifiedKFold
 import pingouin as pg

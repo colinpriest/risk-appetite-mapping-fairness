@@ -17,6 +17,7 @@ Key Components:
 Author: LLM Fairness Research Platform
 """
 
+import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -27,7 +28,8 @@ import plotly.figure_factory as ff
 from plotly.subplots import make_subplots
 import networkx as nx
 import scipy.stats as stats
-from sklearn.manifold import TSNE, UMAP
+from sklearn.manifold import TSNE
+import umap
 from sklearn.cluster import DBSCAN
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
@@ -213,7 +215,7 @@ class BiasLandscapeVisualizer:
                 features[col] = pd.Categorical(features[col]).codes
         
         # Apply UMAP for dimensionality reduction
-        reducer = UMAP(n_components=2, random_state=42)
+        reducer = umap.UMAP(n_components=2, random_state=42)
         reduced_coords = reducer.fit_transform(features)
         
         # Create scatter plot
@@ -387,8 +389,7 @@ class CorrelationNetworkVisualizer:
         # Create figure
         fig = go.Figure(data=[edge_trace, node_trace],
                        layout=go.Layout(
-                        title='Bias Metrics Correlation Network',
-                        titlefont_size=16,
+                        title={'text': 'Bias Metrics Correlation Network', 'font': {'size': 16}},
                         showlegend=False,
                         hovermode='closest',
                         margin=dict(b=20,l=5,r=5,t=40),
@@ -525,8 +526,7 @@ class CorrelationNetworkVisualizer:
                                          line=dict(width=2, color='black')))
         
         fig = go.Figure(data=[edge_trace, node_trace],
-                       layout=go.Layout(title=title,
-                                      titlefont_size=16,
+                       layout=go.Layout(title={'text': title, 'font': {'size': 16}},
                                       showlegend=False,
                                       hovermode='closest',
                                       margin=dict(b=20,l=5,r=5,t=40),
@@ -1706,28 +1706,51 @@ class AdvancedVisualizationSuite:
 
 def main():
     """
-    Main function demonstrating the Advanced Visualization Suite capabilities.
+    Main function for the Advanced Visualization Suite.
     """
-    # Example usage with synthetic data
-    logger.info("Advanced Visualization Suite - Demo Mode")
+    import argparse
     
-    # Create synthetic experiment data for demonstration
-    np.random.seed(42)
-    n_samples = 500
+    parser = argparse.ArgumentParser(description="Advanced Visualization Suite for Risk Fairness Experiments")
+    parser.add_argument("--indir", help="Input directory with experiment results")
+    parser.add_argument("--outdir", help="Output directory for visualizations", default="visualizations")
+    parser.add_argument("--no-dashboard", action="store_true", help="Skip dashboard launch")
     
-    demo_data = {
-        'model': np.random.choice(['gpt-4o', 'claude-3-5-sonnet', 'gemini-pro'], n_samples),
-        'gender': np.random.choice(['Male', 'Female', 'Non-binary'], n_samples),
-        'age_group': np.random.choice(['Young', 'Middle', 'Senior'], n_samples),
-        'location': np.random.choice(['Urban', 'Rural', 'Suburban'], n_samples),
-        'demographic_parity_difference': np.random.normal(0, 0.1, n_samples),
-        'equalized_odds_difference': np.random.normal(0, 0.08, n_samples),
-        'individual_fairness_score': np.random.beta(2, 3, n_samples),
-        'timestamp': pd.date_range(start='2024-01-01', periods=n_samples, freq='H'),
-        'confidence_score': np.random.beta(3, 2, n_samples)
-    }
+    args = parser.parse_args()
     
-    results_df = pd.DataFrame(demo_data)
+    if args.indir and os.path.exists(args.indir):
+        logger.info(f"Advanced Visualization Suite - Processing {args.indir}")
+        
+        # Load actual experiment data
+        jsonl_path = os.path.join(args.indir, "results.jsonl")
+        csv_path = os.path.join(args.indir, "results.csv")
+        
+        if os.path.exists(csv_path):
+            import pandas as pd
+            results_df = pd.read_csv(csv_path)
+            logger.info(f"Loaded {len(results_df)} results from {csv_path}")
+        else:
+            logger.error(f"No results.csv found in {args.indir}")
+            return
+            
+    else:
+        logger.info("Advanced Visualization Suite - Demo Mode")
+        # Create synthetic experiment data for demonstration
+        np.random.seed(42)
+        n_samples = 500
+        
+        demo_data = {
+            'model': np.random.choice(['gpt-4o', 'claude-3-5-sonnet', 'gemini-pro'], n_samples),
+            'gender': np.random.choice(['Male', 'Female', 'Non-binary'], n_samples),
+            'age_group': np.random.choice(['Young', 'Middle', 'Senior'], n_samples),
+            'location': np.random.choice(['Urban', 'Rural', 'Suburban'], n_samples),
+            'demographic_parity_difference': np.random.normal(0, 0.1, n_samples),
+            'equalized_odds_difference': np.random.normal(0, 0.08, n_samples),
+            'individual_fairness_score': np.random.beta(2, 3, n_samples),
+            'timestamp': pd.date_range(start='2024-01-01', periods=n_samples, freq='H'),
+            'confidence_score': np.random.beta(3, 2, n_samples)
+        }
+        
+        results_df = pd.DataFrame(demo_data)
     
     # Initialize visualization suite
     config = VisualizationConfig(
@@ -1740,8 +1763,9 @@ def main():
     viz_suite = AdvancedVisualizationSuite(config)
     
     # Create complete analysis suite
+    output_dir = args.outdir if args.indir else "demo_visualizations"
     visualization_results = viz_suite.create_complete_analysis_suite(
-        results_df, output_dir="demo_visualizations"
+        results_df, output_dir=output_dir
     )
     
     print(f"Visualization suite completed!")
@@ -1749,12 +1773,19 @@ def main():
     print(f"Interactive figures created: {len(visualization_results['interactive_figures'])}")
     
     # Optionally launch dashboard
-    launch_dashboard = input("Launch interactive dashboard? (y/n): ").lower() == 'y'
-    if launch_dashboard:
-        dashboard_app = visualization_results['dashboard_app']
-        if dashboard_app:
-            print("Starting dashboard at http://127.0.0.1:8050")
-            dashboard_app.run_server(debug=False)
+    if not args.no_dashboard:
+        try:
+            launch_dashboard = input("Launch interactive dashboard? (y/n): ").lower() == 'y'
+        except (EOFError, KeyboardInterrupt):
+            launch_dashboard = False
+            
+        if launch_dashboard:
+            dashboard_app = visualization_results['dashboard_app']
+            if dashboard_app:
+                print("Starting dashboard at http://127.0.0.1:8050")
+                dashboard_app.run(debug=False)
+    else:
+        logger.info("Skipping dashboard launch (--no-dashboard specified)")
 
 
 if __name__ == "__main__":

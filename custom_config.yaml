@@ -1,0 +1,21 @@
+  K: 30
+  repeats: 3
+  nl_sample: 3
+  stratified: true
+  use_cache: true
+  pause: 0.5
+
+  models:
+    - "gpt-4o"
+    - "gpt-4o-mini"
+    - "gpt-5-mini"
+    - "claude-3.5-sonnet"
+    - "claude-3.5-haiku"
+    - "gemini-1.5-flash"
+    - "gemini-2.5-flash"
+
+  max_retries: 3
+  retry_delay: 2.0
+  timeout: 120.0
+  validate_responses: true
+  min_response_length: 10

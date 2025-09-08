@@ -1,0 +1,23 @@
+{
+  "dataset_info": {
+    "total_rows": 500,
+    "total_columns": 9,
+    "bias_metrics_identified": 2,
+    "demographic_columns_identified": 4,
+    "has_temporal_data": true,
+    "has_model_data": true
+  },
+  "visualizations_created": {
+    "interactive_figures": 3,
+    "publication_figures": 2,
+    "animations": 2,
+    "networks": 2,
+    "saved_files": 10
+  },
+  "recommendations": [
+    "Use intersectional analysis for multi-demographic interactions",
+    "Conduct temporal stability analysis for bias trends",
+    "Perform comparative model analysis with statistical significance testing"
+  ],
+  "timestamp": "2025-09-08T09:50:34.966720"
+}

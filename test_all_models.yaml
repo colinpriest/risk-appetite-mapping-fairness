@@ -1,0 +1,23 @@
+# Test configuration for all available models
+K: 3                              # Small number for testing
+repeats: 1                        # Single repeat for testing
+nl_sample: 3                      # Small sample for testing
+stratified: true                  # Use stratified sampling
+use_cache: true                   # Enable response caching
+pause: 0.2                        # Seconds between API calls
+
+# All available models
+models:
+  - "gpt-3.5-turbo"
+  - "gpt-4o"
+  - "gpt-5"
+  - "claude-3.5-sonnet"
+  - "claude-3.5-haiku"
+  - "claude-opus-4.1"
+  - "gemini-1.5-pro"
+  - "gemini-2.5-pro"
+  - "gemini-2.5-flash"
+
+# Retry configuration
+max_retries: 3                    # Maximum retry attempts
+retry_delay: 1.0                  # Initial retry delay

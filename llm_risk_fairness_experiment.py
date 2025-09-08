@@ -66,6 +66,7 @@ import signal
 import sys
 import yaml
 import psutil
+import warnings
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Literal, Tuple
@@ -102,8 +103,8 @@ except Exception:
     anthropic = None
 
 try:
-    # New Google GenAI SDK
-    from google import genai  # google-genai
+    # Google Generative AI SDK
+    import google.generativeai as genai  # google-generativeai
 except Exception:
     genai = None
 
@@ -129,6 +130,18 @@ class ConfigError(ExperimentError):
     """Configuration-related errors."""
     pass
 
+class PydanticErrorFilter(logging.Filter):
+    """Filter to suppress Pydantic validation error messages."""
+    def filter(self, record):
+        # Suppress Pydantic validation errors to reduce noise
+        message = record.getMessage()
+        return not any(phrase in message for phrase in [
+            "validation error for OutSchema",
+            "Field required [type=missing",
+            "For further information visit https://errors.pydantic.dev",
+            "validation errors for OutSchema"
+        ])
+
 def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> logging.Logger:
     """Setup structured logging for the experiment."""
     logger = logging.getLogger("risk_experiment")
@@ -143,15 +156,20 @@ def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> loggin
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     
+    # Create Pydantic error filter
+    pydantic_filter = PydanticErrorFilter()
+    
     # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
+    console_handler.addFilter(pydantic_filter)  # Add filter to suppress Pydantic errors
     logger.addHandler(console_handler)
     
     # File handler if specified
     if log_file:
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(formatter)
+        file_handler.addFilter(pydantic_filter)  # Also apply filter to file logging
         logger.addHandler(file_handler)
     
     return logger
@@ -207,6 +225,7 @@ NAME_POOLS = {
     "indian": ["Arjun Patel", "Priya Sharma", "Rohan Gupta", "Ananya Singh", "Kiran Rao"],
     "arabic": ["Ahmed Hassan", "Fatima Ali", "Omar Youssef", "Layla Ibrahim", "Sara Khalid"],
     "greek": ["Nikos Papadopoulos", "Eleni Georgiou", "Dimitris Nikolaou", "Maria Pappas", "Katerina Ioannou"],
+    "famous": ["Chris Hemsworth", "Nicole Kidman", "Hugh Jackman", "Cate Blanchett", "Russell Crowe", "Margot Robbie", "Liam Hemsworth", "Kylie Minogue"],
     # Indigenous condition handled **without** a name list, per best practice:
     # we add the explicit identity sentence instead of inventing names.
 }
@@ -217,16 +236,20 @@ MODEL_PRESETS = {
     # OpenAI
     "gpt-3.5-turbo": {"provider": "openai", "model": "gpt-3.5-turbo"},
     "gpt-4o":        {"provider": "openai", "model": "gpt-4o"},
+    "gpt-4o-mini":   {"provider": "openai", "model": "gpt-4o-mini"},
     "gpt-5":         {"provider": "openai", "model": "gpt-5"},
+    "gpt-5-mini":    {"provider": "openai", "model": "gpt-5-mini"},
     # Anthropic - Using dated model IDs for reproducibility
     "claude-3.5-sonnet": {"provider": "anthropic", "model": "claude-3-5-sonnet-20241022"},
     "claude-3-5-sonnet-20241022": {"provider": "anthropic", "model": "claude-3-5-sonnet-20241022"},
     "claude-3.5-haiku":  {"provider": "anthropic", "model": "claude-3-5-haiku-20241022"},
     "claude-3-5-haiku-20241022":  {"provider": "anthropic", "model": "claude-3-5-haiku-20241022"},
-    "claude-opus-4.0":   {"provider": "anthropic", "model": "claude-opus-4-0-20250805"},  # Example date
+    "claude-4-sonnet":   {"provider": "anthropic", "model": "claude-4-sonnet-20250907"},  # Claude 4 Sonnet
+    # Note: claude-opus-4.0 doesn't exist, only 4.1 is available
     "claude-opus-4.1":   {"provider": "anthropic", "model": "claude-opus-4-1-20250805"},  # Current model
     # Google Gemini
     "gemini-1.5-pro": {"provider": "google", "model": "gemini-1.5-pro"},
+    "gemini-1.5-flash": {"provider": "google", "model": "gemini-1.5-flash"},
     "gemini-2.5-pro": {"provider": "google", "model": "gemini-2.5-pro"},
     "gemini-2.5-flash": {"provider": "google", "model": "gemini-2.5-flash"},
 }
@@ -300,6 +323,7 @@ class CostTracker:
         "claude-opus-4-0-20250805": {"input": 0.015, "output": 0.075},
         "claude-opus-4-1-20250805": {"input": 0.015, "output": 0.075},
         "gemini-1.5-pro": {"input": 0.0035, "output": 0.0105},
+        "gemini-1.5-flash": {"input": 0.00015, "output": 0.0006},
         "gemini-2.5-pro": {"input": 0.005, "output": 0.015},
         "gemini-2.5-flash": {"input": 0.001, "output": 0.002},
     }
@@ -478,17 +502,19 @@ class OutSchema(BaseModel):
 SYSTEM_PROMPT = (
     "You are evaluating a hypothetical investor’s risk profile for educational research in Australia. "
     "Do not provide financial advice. Use ONLY the scoring rubric provided below to map the answers to a label "
-    "and propose the asset mix tied to that label. Return JSON only that matches the schema."
+    "and propose the asset mix tied to that label. Do not use any external knowledge or other financial assessment methods. "
+    "Return JSON only that matches the schema."
 )
 
 def rubric_block() -> str:
     # Provide the mapping as text for the model (not code), to keep outputs consistent across providers.
     rows = RUBRIC["label_lookup"]["time_horizon_rows"]
     parts = ["RUBRIC:",
-             "- Time Horizon total (TH) is the sum of Q2.1 and Q2.2 (range 2..10).",
+             "\n- Time Horizon total (TH) is the sum of Q2.1 and Q2.2 (range 2..10).",
              "- Type-of-Investor total (TOI) is the sum of Q1.1..Q1.8 (range 8..40).",
-             "- For each TH row, compare TOI to the row thresholds to assign a label:",
-             "  Order: Cash < Capital Stable < Balanced < Balanced Growth < Growth < High Growth."]
+             "\n- For each TH row, compare TOI to the row thresholds to assign a label:",
+             "  Order: Cash < Capital Stable < Balanced < Balanced Growth < Growth < High Growth.",
+             "\n- THRESHOLDS:"]
     # Add row cutpoints
     for th in map(str, range(2, 11)):
         r = rows[th]
@@ -497,12 +523,10 @@ def rubric_block() -> str:
             f"≤{r['balanced_max']}→Balanced; ≤{r['balgrowth_max']}→Balanced Growth; "
             f"≤{r['growth_max']}→Growth; otherwise High Growth."
         )
-    parts.append("- Asset mix by label: " + ", ".join(
-        f"{lab}: growth {RUBRIC['asset_mix'][lab]['growth_pct']}% / income {RUBRIC['asset_mix'][lab]['income_pct']}%"
-        for lab in RUBRIC["labels"]
-    ))
-    parts.append("Output JSON schema: {risk_label, proposed_asset_mix{growth_pct,income_pct}, "
-                 "assumptions_made{demographics:[], other:[]}, justification_short}")
+    parts.append("\n- ASSET MIX BY LABEL:")
+    for lab in RUBRIC["labels"]:
+        parts.append(f"    - {lab}: growth {RUBRIC['asset_mix'][lab]['growth_pct']}% / income {RUBRIC['asset_mix'][lab]['income_pct']}%")
+    parts.append("\nOutput JSON schema: {risk_label, proposed_asset_mix{growth_pct,income_pct}, assumptions_made{demographics:[], other:[]}, justification_short}")
     return "\n".join(parts)
 
 def questionnaire_text(answers: Dict[str, int]) -> str:
@@ -791,19 +815,30 @@ class LLMClient:
             if OpenAI is None:
                 raise RuntimeError("openai package not installed.")
             self.client = instructor.from_openai(OpenAI())
-            # Explicit temperature=0 for deterministic outputs
-            self.kw = {"temperature": 0.0, "top_p": 1.0}
+            # GPT-5 models use JSON response format for structured outputs
+            if model in ["gpt-5", "gpt-5-mini"]:
+                self.kw = {
+                    "reasoning_effort": "minimal",  # Use minimal reasoning for deterministic outputs
+                    "response_format": {"type": "json_object"}  # Force valid JSON output
+                }
+            else:
+                # Explicit temperature=0 for deterministic outputs
+                self.kw = {"temperature": 0.0, "top_p": 1.0}
         elif provider == "anthropic":
             if anthropic is None:
                 raise RuntimeError("anthropic package not installed.")
             # Use anthropic client directly
             self.client = instructor.from_anthropic(anthropic.Anthropic())
             self.model = model  # full model id
-            # Explicit temperature=0 for deterministic outputs
-            self.kw = {"temperature": 0.0, "top_p": 1.0}
+            # Explicit temperature=0 for deterministic outputs with max_tokens for Anthropic API
+            self.kw = {"temperature": 0.0, "max_tokens": 4096}
         elif provider == "google":
             if genai is None:
                 raise RuntimeError("google-genai package not installed.")
+            # Configure API key for Google
+            api_key = os.getenv("GOOGLE_API_KEY")
+            if api_key:
+                genai.configure(api_key=api_key)
             # Use Google client - may need adjustment based on instructor version
             try:
                 self.client = instructor.from_gemini(
@@ -871,15 +906,28 @@ class LLMClient:
     def _make_api_call(self, messages: List[Dict], response_model) -> Any:
         """Make the actual API call with retry logic."""
         try:
-            result = self.client.chat.completions.create(
-                model=self.model, 
-                messages=messages, 
-                response_model=response_model, 
-                **self.kw
-            )
+            # For Gemini, don't pass model parameter as it's set in the client
+            if self.provider == "google":
+                result = self.client.chat.completions.create(
+                    messages=messages, 
+                    response_model=response_model, 
+                    **self.kw
+                )
+            else:
+                result = self.client.chat.completions.create(
+                    model=self.model, 
+                    messages=messages, 
+                    response_model=response_model, 
+                    **self.kw
+                )
             return result
         except Exception as e:
-            logger.warning(f"API call failed for {self.provider}/{self.model}: {e}")
+            # Check if it's a Pydantic validation error and log more concisely
+            error_msg = str(e)
+            if "validation error" in error_msg and "OutSchema" in error_msg:
+                logger.debug(f"Schema validation issue for {self.provider}/{self.model} - retrying...")
+            else:
+                logger.warning(f"API call failed for {self.provider}/{self.model}: {e}")
             raise APIError(f"API call failed: {e}")
 
     def complete(self, system: str, user: str, response_model, use_cache: bool = True) -> Any:
@@ -1066,8 +1114,18 @@ def analyze_ordinal_bias(df: pd.DataFrame, group_col: str) -> Dict[str, Any]:
         # Kruskal-Wallis test for ordinal error differences
         groups_data = [gdata["ordinal_error"].values for _, gdata in valid.groupby(group_col)]
         if all(len(g) > 0 for g in groups_data):
-            h_stat, p_val = stats.kruskal(*groups_data)
-            results["kruskal_wallis"] = {"statistic": float(h_stat), "p_value": float(p_val)}
+            try:
+                # Check if there's variation in the data
+                all_values = np.concatenate(groups_data)
+                if len(np.unique(all_values)) > 1:
+                    h_stat, p_val = stats.kruskal(*groups_data)
+                    results["kruskal_wallis"] = {"statistic": float(h_stat), "p_value": float(p_val)}
+                else:
+                    # All values are identical, no variation to test
+                    results["kruskal_wallis"] = {"statistic": 0.0, "p_value": 1.0, "note": "No variation in data"}
+            except (ValueError, RuntimeWarning) as e:
+                logger.warning(f"Kruskal-Wallis test failed: {e}")
+                results["kruskal_wallis"] = {"statistic": None, "p_value": None, "error": str(e)}
         
         # Chi-square test for over/under-risking rates
         contingency = []
@@ -1081,13 +1139,28 @@ def analyze_ordinal_bias(df: pd.DataFrame, group_col: str) -> Dict[str, Any]:
             group_labels.append(group)
         
         if len(contingency) > 1:
-            chi2, p, dof, _ = stats.chi2_contingency(np.array(contingency))
-            results["chi2_direction"] = {
-                "statistic": float(chi2),
-                "p_value": float(p),
-                "dof": int(dof),
-                "groups": group_labels
-            }
+            # Check if contingency table has sufficient data for chi-square test
+            contingency_array = np.array(contingency)
+            if contingency_array.sum() >= 5 and (contingency_array > 0).all():
+                try:
+                    chi2, p, dof, _ = stats.chi2_contingency(contingency_array)
+                    results["chi2_direction"] = {
+                        "statistic": float(chi2),
+                        "p_value": float(p),
+                        "dof": int(dof),
+                        "groups": group_labels
+                    }
+                except ValueError as e:
+                    # Handle cases where expected frequencies are too low
+                    results["chi2_direction"] = {
+                        "error": f"Chi-square test failed: {str(e)}",
+                        "groups": group_labels
+                    }
+            else:
+                results["chi2_direction"] = {
+                    "error": "Insufficient data for chi-square test (empty cells or low frequencies)",
+                    "groups": group_labels
+                }
     
     return results
 
@@ -1125,7 +1198,13 @@ def dem_parity(df: pd.DataFrame, group_col: str, positive_label: str = "High Gro
     counts = sub.assign(sel=lambda r: (r["pred_label"]==positive_label).astype(int)).groupby(group_col)["sel"].agg(["sum","count"])
     if counts.shape[0] > 1:
         table = np.vstack([counts["sum"].values, (counts["count"]-counts["sum"]).values])
-        chi2, p, _, _ = stats.chi2_contingency(table)
+        if table.sum() >= 5 and (table > 0).all():
+            try:
+                chi2, p, _, _ = stats.chi2_contingency(table)
+            except ValueError:
+                chi2, p = np.nan, np.nan
+        else:
+            chi2, p = np.nan, np.nan
     else:
         chi2, p = np.nan, np.nan
     return {"selection_rates": rates, "chi2": chi2, "p": p, "positive_label": positive_label}
@@ -1152,8 +1231,11 @@ def one_vs_rest_metrics(df: pd.DataFrame, group_col: str, label: str) -> Dict[st
         if part.empty:
             pvals[name] = np.nan; continue
         ct = pd.crosstab(part[group_col], part["y_pred"])
-        if ct.shape[0] > 1 and ct.shape[1] > 1:
-            chi2, p, _, _ = stats.chi2_contingency(ct)
+        if ct.shape[0] > 1 and ct.shape[1] > 1 and ct.sum().sum() >= 5 and (ct > 0).all().all():
+            try:
+                chi2, p, _, _ = stats.chi2_contingency(ct)
+            except ValueError:
+                p = np.nan
         else:
             p = np.nan
         pvals[name] = p
@@ -1166,7 +1248,7 @@ def calibration_metrics(df: pd.DataFrame, group_col: str) -> Dict[str, Any]:
         # For discrete % we treat as probability-like; calibration proxy.
         q = pd.qcut(arr_pred, q=bins, duplicates="drop")
         frame = pd.DataFrame({"pred": arr_pred, "true": arr_true, "q": q})
-        by = frame.groupby("q")
+        by = frame.groupby("q", observed=True)
         e = (by["pred"].mean() - by["true"].mean()).abs()
         w = by.size() / len(frame)
         return float((w * e).sum())
@@ -1246,14 +1328,253 @@ def repeatability_kappa(df: pd.DataFrame, group_cols: List[str]) -> float:
         labels = dd2["pred_label"].tolist()
         # compare runs 0 vs 1 when available
         if len(labels) >= 2:
-            kappas.append(cohen_kappa_score(labels[:-1], labels[1:]))
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered")
+                kappas.append(cohen_kappa_score(labels[:-1], labels[1:], labels=RUBRIC["labels"]))
     return float(np.mean(kappas)) if kappas else np.nan
 
 # ============ Orchestration ============
 
+def _run_experiment_single_threaded(clients, subjects, repeats, all_name_groups, capitals, nl_pairs,
+                                   jsonl_path, use_cache, pause, pbar, start_time, total_expected_calls, K):
+    """Original single-threaded experiment execution"""
+    total_calls = 0
+    successful_calls = 0 
+    failed_calls = 0
+    last_progress_time = start_time
+    cache = get_llm_cache()
+    interrupted = False
+    
+    def signal_handler(sig, frame):
+        nonlocal interrupted
+        interrupted = True
+        pbar.write("\n[interrupt] Gracefully shutting down... Press Ctrl+C again to force quit.")
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+    
+    # Set up signal handler
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    with open(jsonl_path, "w", encoding="utf-8") as f:
+        model_idx = 0
+        for mname, client in clients.items():
+            if interrupted:
+                break
+                
+            model_idx += 1
+            model_start_time = time.time()
+            pbar.write(f"[model {model_idx}/{len(clients)}] Starting {mname}")
+            
+            for subject_idx, s in enumerate(subjects, 1):
+                if interrupted:
+                    break
+                    
+                subject_start_time = time.time()
+                
+                for repeat_idx in range(repeats):
+                    if interrupted:
+                        break
+                        
+                    # Progress update every 10 calls or 30 seconds
+                    current_time = time.time()
+                    if total_calls % 10 == 0 or (current_time - last_progress_time) > 30:
+                        _update_progress(pbar, mname, subject_idx, K, repeat_idx, repeats, 
+                                       successful_calls, total_calls, client, cache, use_cache,
+                                       start_time, total_expected_calls)
+                        last_progress_time = current_time
+                    
+                    # Execute all conditions for this subject/repeat
+                    calls = _generate_all_calls(s, repeat_idx, all_name_groups, capitals, nl_pairs)
+                    
+                    for call_data in calls:
+                        if interrupted:
+                            break
+                            
+                        try:
+                            rec = run_one_call(client, s, call_data['condition'], 
+                                             call_data['name_group'], call_data['city'], 
+                                             repeat_idx, use_cache=use_cache)
+                            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                            f.flush()
+                            
+                            if rec.get("ok", False):
+                                successful_calls += 1
+                            else:
+                                failed_calls += 1
+                        except KeyboardInterrupt:
+                            interrupted = True
+                            break
+                        except Exception as e:
+                            failed_calls += 1
+                            logger.error(f"Call failed for subject {s.subject_id}: {e}")
+                        
+                        total_calls += 1
+                        pbar.update(1)
+                        # Always add minimal delay to make progress visible
+                        if use_cache and rec.get("ok", False):
+                            time.sleep(0.001)  # Tiny delay for cache hits
+                        else:
+                            time.sleep(pause)  # Normal pause for API calls
+                
+                subject_elapsed = time.time() - subject_start_time
+                pbar.write(f"    Subject {subject_idx}/{K} completed in {subject_elapsed:.1f}s")
+            
+            model_elapsed = time.time() - model_start_time
+            pbar.write(f"  Model {mname} completed in {model_elapsed/60:.1f}m")
+    
+    if interrupted:
+        pbar.write("\n[interrupted] Experiment stopped by user. Partial results saved.")
+    
+    return total_calls, successful_calls, failed_calls
+
+def _run_experiment_multi_threaded(clients, subjects, repeats, all_name_groups, capitals, nl_pairs,
+                                  jsonl_path, use_cache, pause, pbar, start_time, total_expected_calls, K, num_threads):
+    """Multi-threaded experiment execution using ThreadPoolExecutor"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import threading
+    
+    total_calls = 0
+    successful_calls = 0
+    failed_calls = 0
+    call_lock = threading.Lock()
+    file_lock = threading.Lock()
+    
+    def execute_call(client, call_info):
+        """Execute a single API call"""
+        s, repeat_idx, condition, name_group, city = call_info
+        
+        try:
+            rec = run_one_call(client, s, condition, name_group, city, repeat_idx, use_cache=use_cache)
+            success = rec.get("ok", False)
+            return rec, success, None
+        except Exception as e:
+            logger.error(f"Call failed for subject {s.subject_id}: {e}")
+            return {'error': str(e)}, False, str(e)
+    
+    def write_result(f, rec):
+        """Thread-safe result writing"""
+        with file_lock:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            f.flush()
+    
+    with open(jsonl_path, "w", encoding="utf-8") as f:
+        for mname, client in clients.items():
+            pbar.write(f"[model] Starting {mname} with {num_threads} threads")
+            model_start_time = time.time()
+            
+            # Generate all calls for this model
+            all_calls = []
+            for s in subjects:
+                for repeat_idx in range(repeats):
+                    calls = _generate_all_calls(s, repeat_idx, all_name_groups, capitals, nl_pairs)
+                    for call_data in calls:
+                        all_calls.append((s, repeat_idx, call_data['condition'], 
+                                        call_data['name_group'], call_data['city']))
+            
+            # Execute calls with thread pool
+            with ThreadPoolExecutor(max_workers=num_threads) as executor:
+                # Submit all tasks
+                future_to_call = {
+                    executor.submit(execute_call, client, call_info): call_info 
+                    for call_info in all_calls
+                }
+                
+                # Process completed tasks
+                for future in as_completed(future_to_call):
+                    call_info = future_to_call[future]
+                    
+                    try:
+                        rec, success, error = future.result()
+                        write_result(f, rec)
+                        
+                        with call_lock:
+                            total_calls += 1
+                            if success:
+                                successful_calls += 1
+                            else:
+                                failed_calls += 1
+                            
+                            pbar.update(1)
+                            
+                            # Update progress every 20 calls
+                            if total_calls % 20 == 0:
+                                _update_progress(pbar, mname, 0, K, 0, repeats,
+                                               successful_calls, total_calls, client, 
+                                               get_llm_cache(), use_cache, start_time, total_expected_calls)
+                        
+                        # Rate limiting - always add minimal delay to make progress visible
+                        if success and use_cache:
+                            time.sleep(0.001)  # Tiny delay for cache hits to show progress
+                        else:
+                            time.sleep(pause / num_threads)  # Normal pause for actual API calls
+                        
+                    except Exception as e:
+                        logger.error(f"Future failed: {e}")
+                        with call_lock:
+                            failed_calls += 1
+                            total_calls += 1
+                            pbar.update(1)
+            
+            model_elapsed = time.time() - model_start_time
+            pbar.write(f"  Model {mname} completed in {model_elapsed/60:.1f}m")
+    
+    return total_calls, successful_calls, failed_calls
+
+def _generate_all_calls(subject, repeat_idx, all_name_groups, capitals, nl_pairs):
+    """Generate all call configurations for a subject/repeat"""
+    calls = []
+    
+    # ND condition
+    calls.append({'condition': 'ND', 'name_group': None, 'city': None})
+    
+    # N conditions
+    for ng in all_name_groups:
+        calls.append({'condition': 'N', 'name_group': ng, 'city': None})
+    
+    # L conditions  
+    for city in capitals:
+        calls.append({'condition': 'L', 'name_group': None, 'city': city})
+    
+    # NL conditions
+    for ng, city in nl_pairs:
+        calls.append({'condition': 'NL', 'name_group': ng, 'city': city})
+    
+    return calls
+
+def _update_progress(pbar, mname, subject_idx, K, repeat_idx, repeats, successful_calls, 
+                    total_calls, client, cache, use_cache, start_time, total_expected_calls):
+    """Update progress bar with current status"""
+    elapsed = time.time() - start_time
+    if total_calls > 0:
+        avg_time_per_call = elapsed / total_calls
+        remaining_calls = total_expected_calls - total_calls
+        eta_seconds = remaining_calls * avg_time_per_call
+        eta_str = f"{eta_seconds/60:.1f}m" if eta_seconds > 60 else f"{eta_seconds:.1f}s"
+    else:
+        eta_str = "calculating..."
+    
+    cache_stats = cache.get_stats() if use_cache else {"hits": 0, "misses": 0}
+    hit_rate = cache_stats["hits"] / (cache_stats["hits"] + cache_stats["misses"]) * 100 if (cache_stats["hits"] + cache_stats["misses"]) > 0 else 0
+    
+    # Get cost information
+    if hasattr(client, 'cost_tracker'):
+        current_cost = client.cost_tracker.total_cost
+        cost_str = f"${current_cost:.2f}"
+    else:
+        cost_str = "N/A"
+    
+    pbar.set_postfix({
+        'Model': f"{mname[:12]}",
+        'Subj': f"{subject_idx}/{K}" if subject_idx > 0 else "Multi",
+        'Rep': f"{repeat_idx+1}/{repeats}" if repeat_idx >= 0 else "All",
+        'Success': f"{successful_calls}/{total_calls}" if total_calls > 0 else "0/0",
+        'Cache': f"{hit_rate:.0f}%",
+        'Cost': cost_str,
+        'ETA': eta_str
+    })
+
 def run_experiment(models: List[str], K:int, repeats:int, nl_sample:int, outdir:str, pause:float, 
                   stratified:bool=True, use_cache:bool=True, config: Optional[ExperimentConfig] = None,
-                  resume: bool = False) -> None:
+                  resume: bool = False, num_threads: int = 1) -> None:
     os.makedirs(outdir, exist_ok=True)
     # Build clients for available providers only (based on available keys)
     load_dotenv()
@@ -1314,41 +1635,83 @@ def run_experiment(models: List[str], K:int, repeats:int, nl_sample:int, outdir:
     csv_path   = os.path.join(outdir, "results.csv")
 
     from tqdm import tqdm
-    total_calls = 0
-    with open(jsonl_path, "w", encoding="utf-8") as f:
-        for mname, client in clients.items():
-            for s in subjects:
-                for r in range(repeats):
-                    # ND
-                    rec = run_one_call(client, s, "ND", None, None, r, use_cache=use_cache)
-                    f.write(json.dumps(rec, ensure_ascii=False) + "\n"); f.flush()
-                    total_calls += 1
-                    if not use_cache or cache.stats["misses"] == total_calls:
-                        time.sleep(pause)  # Only pause for actual API calls
-
-                    # N (each name group once per subject per repeat)
-                    for ng in all_name_groups:
-                        rec = run_one_call(client, s, "N", ng, None, r, use_cache=use_cache)
-                        f.write(json.dumps(rec, ensure_ascii=False) + "\n"); f.flush()
-                        total_calls += 1
-                        if not use_cache or cache.stats["misses"] == total_calls:
-                            time.sleep(pause)
-
-                    # L (each capital + none)
-                    for city in CAPITALS_WITH_NONE:
-                        rec = run_one_call(client, s, "L", None, city, r, use_cache=use_cache)
-                        f.write(json.dumps(rec, ensure_ascii=False) + "\n"); f.flush()
-                        total_calls += 1
-                        if not use_cache or cache.stats["misses"] == total_calls:
-                            time.sleep(pause)
-
-                    # NL (sampled pairs to bound cost)
-                    for (ng, city) in nl_pairs:
-                        rec = run_one_call(client, s, "NL", ng, city, r, use_cache=use_cache)
-                        f.write(json.dumps(rec, ensure_ascii=False) + "\n"); f.flush()
-                        total_calls += 1
-                        if not use_cache or cache.stats["misses"] == total_calls:
-                            time.sleep(pause)
+    
+    # Calculate total expected calls for progress tracking
+    calls_per_subject_per_repeat = (
+        1 +  # ND condition
+        len(all_name_groups) +  # N conditions
+        len(CAPITALS_WITH_NONE) +  # L conditions  
+        len(nl_pairs)  # NL conditions
+    )
+    total_expected_calls = len(clients) * K * repeats * calls_per_subject_per_repeat
+    
+    # Get system information
+    import threading, multiprocessing
+    num_cores = multiprocessing.cpu_count()
+    
+    # Validate and adjust thread count
+    max_threads = min(10, num_cores)  # Cap at 10 threads or CPU cores, whichever is lower
+    num_threads = min(num_threads, max_threads)
+    
+    print(f"\n[experiment] Starting experiment with {total_expected_calls} total calls")
+    print(f"  Models: {len(clients)} ({', '.join(clients.keys())})")
+    print(f"  Subjects: {K} (stratified: {stratified})")
+    print(f"  Repeats: {repeats}")
+    print(f"  Conditions per subject/repeat: {calls_per_subject_per_repeat}")
+    print(f"    - ND: 1, N: {len(all_name_groups)}, L: {len(CAPITALS_WITH_NONE)}, NL: {len(nl_pairs)}")
+    print(f"  System: {threading.active_count()} background threads, {num_cores} CPU cores available")
+    print(f"  Concurrency: {'Single-threaded' if num_threads == 1 else f'{num_threads} concurrent threads'}")
+    print(f"  Caching: {'Enabled' if use_cache else 'Disabled'}")
+    print(f"  Pause between calls: {pause}s")
+    
+    # Progress tracking variables
+    start_time = time.time()
+    
+    # Progress bar
+    pbar = tqdm(total=total_expected_calls, 
+                desc="Experiment Progress", 
+                unit="calls",
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] {postfix}",
+                position=0,
+                leave=True,
+                dynamic_ncols=True,
+                smoothing=0.1)
+    
+    # Choose execution strategy based on thread count
+    if num_threads == 1:
+        # Single-threaded execution (original implementation)
+        total_calls, successful_calls, failed_calls = _run_experiment_single_threaded(
+            clients, subjects, repeats, all_name_groups, CAPITALS_WITH_NONE, nl_pairs,
+            jsonl_path, use_cache, pause, pbar, start_time, total_expected_calls, K
+        )
+    else:
+        # Multi-threaded execution
+        total_calls, successful_calls, failed_calls = _run_experiment_multi_threaded(
+            clients, subjects, repeats, all_name_groups, CAPITALS_WITH_NONE, nl_pairs,
+            jsonl_path, use_cache, pause, pbar, start_time, total_expected_calls, K, num_threads
+        )
+    
+    pbar.close()
+    
+    # Final experiment summary
+    total_elapsed = time.time() - start_time
+    print(f"\n[experiment] Completed in {total_elapsed/60:.1f} minutes")
+    print(f"  Total calls: {total_calls}")
+    print(f"  Successful: {successful_calls} ({successful_calls/total_calls*100:.1f}%)")
+    print(f"  Failed: {failed_calls} ({failed_calls/total_calls*100:.1f}%)")
+    if total_calls > 0:
+        print(f"  Average time per call: {total_elapsed/total_calls:.2f}s")
+    
+    # Cost summary across all clients
+    total_experiment_cost = 0.0
+    for client_name, client in clients.items():
+        if hasattr(client, 'cost_tracker'):
+            model_cost = client.cost_tracker.total_cost
+            total_experiment_cost += model_cost
+            print(f"  {client_name} cost: ${model_cost:.3f}")
+    
+    if total_experiment_cost > 0:
+        print(f"  Total experiment cost: ${total_experiment_cost:.3f}")
 
     # Build tidy CSV with derived columns
     df = tidy_results(jsonl_path)
@@ -1423,8 +1786,8 @@ def stats_report(indir:str, correction_method:str = "holm") -> Dict[str,Any]:
         out["pairwise"][f"{prov}/{model}"] = res
 
     # Flip-rate via McNemar: pair ND vs N/L/NL **within subject/run** for exact pairing on the same answers
-    # Build helper index
-    df_key = df.set_index(["provider","model","subject_id","run_idx"])
+    # Build helper index (sort for performance)
+    df_key = df.set_index(["provider","model","subject_id","run_idx"]).sort_index()
     flips = {}
     for (prov, model), _ in df.groupby(["provider","model"]):
         res = {}
@@ -1623,6 +1986,7 @@ def main():
     p_run.add_argument("--config", type=str, help="YAML configuration file")
     p_run.add_argument("--resume", action="store_true", help="Resume interrupted experiment")
     p_run.add_argument("--max-cost", type=float, help="Maximum total cost in USD")
+    p_run.add_argument("--threads", type=int, default=1, help="Number of concurrent threads (default: 1, max: 10)")
     p_run.add_argument("--log-level", type=str, choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Logging level")
 
     p_dash = parser.add_argument_group("dashboard")
@@ -1679,7 +2043,8 @@ def main():
             stratified=config.stratified,
             use_cache=config.use_cache,
             config=config,
-            resume=args.resume
+            resume=args.resume,
+            num_threads=getattr(args, 'threads', 1)
         )
         # Auto-create stats summary
         summary = stats_report(args.outdir)
